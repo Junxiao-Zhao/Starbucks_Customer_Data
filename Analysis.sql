@@ -10,8 +10,33 @@ FROM profile_proc;
 SELECT
     DISTINCT gender,
     COUNT(gender) OVER() AS total,
+    COUNT(gender) OVER(PARTITION BY gender) AS each_gender,
     COUNT(gender) OVER(PARTITION BY gender) / COUNT(gender) OVER() AS gender_percentage
 FROM profile_proc;
+
+-- percentage of each gender above certain age
+
+DELIMITER //
+
+CREATE PROCEDURE GENDER_PERCENTAGE_BY_AGE(IN INPUT_AGE 
+INT) BEGIN 
+	SELECT
+	    DISTINCT gender,
+	    COUNT(gender) OVER() AS total,
+	    COUNT(gender) OVER(PARTITION BY gender) AS each_gender,
+	    COUNT(gender) OVER(PARTITION BY gender) / (
+	        SELECT COUNT(*)
+	        FROM
+	            profile_proc
+	    ) AS gender_percentage
+	FROM profile_proc
+	WHERE age >= input_age;
+	END// 
+
+
+DELIMITER;
+
+CALL `GENDER_PERCENTAGE_BY_AGE`(60);
 
 -- age from 18 to 118 (abnormal)
 
@@ -56,8 +81,6 @@ SELECT
     COUNT(*) OVER() AS total_count,
     COUNT(*) OVER(PARTITION BY age_group) / COUNT(*) OVER() AS age_group_percentage
 FROM group_age;
-
-SELECT * FROM profile_proc;
 
 -- became_member_on YEAR_MONTH distribution
 
@@ -138,17 +161,7 @@ FROM (
     ) AS temp
 GROUP BY offer_type;
 
-SELECT COUNT(DISTINCT person) FROM transcript_proc;
-
-SELECT COUNT(DISTINCT customer_id) FROM profile_proc;
-
-SELECT
-    DISTINCT person,
-    JSON_ARRAYAGG(event)
-FROM transcript_proc
-GROUP BY person;
-
--- Number of customers completed all processes: offer received -> offer view -> offer complete
+-- Number of customers completed/not completed all processes: offer received -> offer view -> offer complete
 
 CREATE VIEW PERSON_EVENT AS 
 	SELECT
@@ -161,120 +174,131 @@ CREATE VIEW PERSON_EVENT AS
 	        FROM
 	            transcript_proc
 	    ) AS temp
-	GROUP BY person
-; 
+	GROUP BY
+PERSON; 
 
-SELECT COUNT(*)
-FROM person_event
-WHERE
-    JSON_CONTAINS(
-        combined_event,
-        JSON_ARRAY(
-            'offer received',
-            'offer viewed',
-            'offer completed'
-        )
-    ) = 1;
+DROP PROCEDURE COUNT_PROCESS_COMPLETE_STATUS;
 
--- gender distribution of those completed
+DELIMITER //
 
-SELECT
-    DISTINCT gender,
-    COUNT(gender) OVER(PARTITION BY gender) AS each_num,
-    COUNT(gender) OVER() AS gender_total,
-    COUNT(gender) OVER(PARTITION BY gender) / COUNT(gender) OVER() AS gender_percentage
-FROM person_event AS pe
-    LEFT JOIN profile_proc as pp ON pe.person = pp.customer_id
-WHERE
-    JSON_CONTAINS(
-        combined_event,
-        JSON_ARRAY(
-            'offer received',
-            'offer viewed',
-            'offer completed'
-        )
-    ) = 1;
+CREATE PROCEDURE COUNT_PROCESS_COMPLETE_STATUS(IN COMPLETED 
+INT, OUT OUTPUT_COUNT INT) BEGIN 
+	SELECT
+	    COUNT(*) INTO output_count
+	FROM person_event
+	WHERE
+	    JSON_CONTAINS(
+	        combined_event,
+	        JSON_ARRAY(
+	            'offer received',
+	            'offer viewed',
+	            'offer completed'
+	        )
+	    ) = completed;
+	END// 
 
--- gender distribution of those not completed
 
-SELECT
-    DISTINCT gender,
-    COUNT(gender) OVER(PARTITION BY gender) AS each_num,
-    COUNT(gender) OVER() AS gender_total,
-    COUNT(gender) OVER(PARTITION BY gender) / COUNT(gender) OVER() AS gender_percentage
-FROM person_event AS pe
-    LEFT JOIN profile_proc as pp ON pe.person = pp.customer_id
-WHERE
-    JSON_CONTAINS(
-        combined_event,
-        JSON_ARRAY(
-            'offer received',
-            'offer viewed',
-            'offer completed'
-        )
-    ) = 0;
+DELIMITER;
+
+-- num completed
+
+CALL `COUNT_PROCESS_COMPLETE_STATUS`(1, @num_completed);
+
+SELECT @num_completed;
+
+-- num not completed
+
+CALL `COUNT_PROCESS_COMPLETE_STATUS`(0, @num_not_complete);
+
+SELECT @num_not_complete;
+
+DROP PROCEDURE DISTRB_PROCESS_COMPLETE;
+
+-- Procedure for calculating distribution
+
+DELIMITER //
+
+CREATE PROCEDURE DISTRB_PROCESS_COMPLETE(IN COMPLETED 
+INT, IN LEFT_TABLE_NAME VARCHAR(255), IN RIGHT_TABLE_NAME 
+VARCHAR(255), IN COL_NAME VARCHAR(255)) BEGIN 
+	SET
+	    @sql = CONCAT(
+	        "SELECT DISTINCT ",
+	        COL_NAME,
+	        ", COUNT(",
+	        COL_NAME,
+	        ") OVER(PARTITION BY ",
+	        COL_NAME,
+	        ") AS each_num, COUNT(",
+	        COL_NAME,
+	        ") OVER() AS total, COUNT(",
+	        COL_NAME,
+	        ") OVER(PARTITION BY ",
+	        COL_NAME,
+	        ") / COUNT(",
+	        COL_NAME,
+	        ") OVER() AS percentage FROM ",
+	        LEFT_TABLE_NAME,
+	        " AS pe LEFT JOIN ",
+	        RIGHT_TABLE_NAME,
+	        " as pp ON pe.person = pp.customer_id WHERE JSON_CONTAINS( combined_event, JSON_ARRAY( 'offer received', 'offer viewed', 'offer completed' ) ) = ",
+	        COMPLETED,
+	        ";"
+	    );
+	PREPARE stmt FROM @sql;
+	EXECUTE stmt;
+	DEALLOCATE PREPARE stmt;
+	END// 
+
+
+DELIMITER;
+
+-- gender distribution of completed
+
+CALL
+    `DISTRB_PROCESS_COMPLETE`(
+        1,
+        'person_event',
+        'profile_proc',
+        'gender'
+    );
+
+-- gender distribution of not completed
+
+CALL`DISTRB_PROCESS_COMPLETE`(0, 'person_event', 'gender');
 
 -- income distribution of those completed
 
-WITH income_distrib AS (
-        SELECT
-            *,
-            CASE
-                WHEN income_null < 50000 THEN 'low income'
-                WHEN income_null >= 50000
-                AND income_null < 100000 THEN 'medium income'
-                WHEN income_null >= 100000 THEN 'high income'
-                ELSE NULL
-            END AS income_group
-        FROM profile_proc
-    )
-SELECT
-    DISTINCT income_group,
-    COUNT(*) OVER() AS total,
-    COUNT(*) OVER(PARTITION BY income_group) AS each_income_num,
-    COUNT(*) OVER(PARTITION BY income_group) / COUNT(*) OVER() AS income_distribution
-FROM income_distrib as id
-    LEFT JOIN person_event AS pe ON id.customer_id = pe.person
-WHERE
-    JSON_CONTAINS(
-        combined_event,
-        JSON_ARRAY(
-            'offer received',
-            'offer viewed',
-            'offer completed'
-        )
-    ) = 1;
+CREATE VIEW INCOME_DISTRIB AS 
+	SELECT
+	    *,
+	    CASE
+	        WHEN income_null < 50000 THEN 'low income'
+	        WHEN income_null >= 50000
+	        AND income_null < 100000 THEN 'medium income'
+	        WHEN income_null >= 100000 THEN 'high income'
+	        ELSE NULL
+	    END AS income_group
+	FROM
+PROFILE_PROC; 
+
+CALL
+    `DISTRB_PROCESS_COMPLETE`(
+        1,
+        'person_event',
+        'income_distrib',
+        'income_group'
+    );
 
 -- income distribution of those not completed
 
-WITH income_distrib AS (
-        SELECT
-            *,
-            CASE
-                WHEN income_null < 50000 THEN 'low income'
-                WHEN income_null >= 50000
-                AND income_null < 100000 THEN 'medium income'
-                WHEN income_null >= 100000 THEN 'high income'
-                ELSE NULL
-            END AS income_group
-        FROM profile_proc
-    )
-SELECT
-    DISTINCT income_group,
-    COUNT(*) OVER() AS total,
-    COUNT(*) OVER(PARTITION BY income_group) AS each_income_num,
-    COUNT(*) OVER(PARTITION BY income_group) / COUNT(*) OVER() AS income_distribution
-FROM income_distrib as id
-    LEFT JOIN person_event AS pe ON id.customer_id = pe.person
-WHERE
-    JSON_CONTAINS(
-        combined_event,
-        JSON_ARRAY(
-            'offer received',
-            'offer viewed',
-            'offer completed'
-        )
-    ) = 0;
+CALL
+    `DISTRB_PROCESS_COMPLETE`(
+        0,
+        'person_event',
+        'income_distrib',
+        'income_group'
+    );
 
 -- count number of offer received, offer view, and offer complete for each customer
 
