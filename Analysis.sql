@@ -331,3 +331,30 @@ SELECT
     num_offer_viewed / num_offer_received AS view_perct,
     num_offer_completed / num_offer_received AS complete_perct
 FROM num_offer;
+
+-- count number each reward/difficulty/duration for each offer type
+
+SELECT
+    *,
+    COUNT(offer_id) OVER(PARTITION BY difficulty) AS difficulty_range,
+    COUNT(offer_id) OVER(PARTITION BY reward) AS reward_range,
+    COUNT(offer_id) OVER(PARTITION BY duration) AS duration_range
+FROM portfolio_proc
+WHERE offer_type = "DISCOUNT"
+UNION ALL
+SELECT
+    *,
+    COUNT(offer_id) OVER(PARTITION BY difficulty) AS difficulty_range,
+    COUNT(offer_id) OVER(PARTITION BY reward) AS reward_range,
+    COUNT(offer_id) OVER(PARTITION BY duration) AS duration_range
+FROM portfolio_proc
+WHERE offer_type = "BOGO"
+UNION ALL
+SELECT
+    *,
+    COUNT(offer_id) OVER(PARTITION BY difficulty) AS difficulty_range,
+    COUNT(offer_id) OVER(PARTITION BY reward) AS reward_range,
+    COUNT(offer_id) OVER(PARTITION BY duration) AS duration_range
+FROM portfolio_proc
+WHERE
+    offer_type = "INFORMATIONAL";
