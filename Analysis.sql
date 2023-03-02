@@ -241,7 +241,7 @@ VARCHAR(255), IN COL_NAME VARCHAR(255)) BEGIN
 	        LEFT_TABLE_NAME,
 	        " AS pe LEFT JOIN ",
 	        RIGHT_TABLE_NAME,
-	        " as pp ON pe.person = pp.customer_id WHERE JSON_CONTAINS( combined_event, JSON_ARRAY( 'offer received', 'offer viewed', 'offer completed' ) ) = ",
+	        " AS pp ON pe.person = pp.customer_id WHERE JSON_CONTAINS( combined_event, JSON_ARRAY( 'offer received', 'offer viewed', 'offer completed' ) ) = ",
 	        COMPLETED,
 	        ";"
 	    );
@@ -324,15 +324,27 @@ WITH num_offer AS (
                 END
             ) AS num_offer_completed
         FROM transcript_proc
-        GROUP BY person
-    )
-SELECT
-    *,
-    num_offer_viewed / num_offer_received AS view_perct,
-    num_offer_completed / num_offer_received AS complete_perct
-FROM num_offer;
+        GROUP BY person;
 
 -- count number each reward/difficulty/duration for each offer type
+
+DELIMITER //
+
+CREATE PROCEDURE COUNT_EACH_OFFER(IN COL VARCHAR(255
+)) BEGIN 
+	SELECT
+	    *,
+	    COUNT(offer_id) OVER(PARTITION BY difficulty) AS difficulty_range,
+	    COUNT(offer_id) OVER(PARTITION BY reward) AS reward_range,
+	    COUNT(offer_id) OVER(PARTITION BY duration) AS duration_range
+	FROM portfolio_proc
+	WHERE offer_type = COL;
+	END// 
+
+
+DELIMITER;
+
+CALL `COUNT_EACH_OFFER`("DISCOUNT");
 
 SELECT
     *,
@@ -358,3 +370,36 @@ SELECT
 FROM portfolio_proc
 WHERE
     offer_type = "INFORMATIONAL";
+
+SELECT
+    gender,
+    COUNT(gender) OVER(PARTITION BY gender) AS each_gender_num,
+    COUNT(gender) OVER() AS total_gender,
+    COUNT(gender) OVER(PARTITION BY gender) / COUNT(gender) OVER() AS `gender percentage`
+FROM person_event AS pe
+    LEFT JOIN profile_proc AS pp ON pe.person = pp.customer_id
+WHERE
+    JSON_CONTAINS(
+        combined_event,
+        JSON_ARRAY(
+            'offer received',
+            'offer viewed',
+            'offer completed'
+        )
+    ) = 1;
+
+SELECT
+    *,
+    CASE
+        WHEN JSON_CONTAINS(
+            combined_event,
+            JSON_ARRAY(
+                'offer received',
+                'offer viewed',
+                'offer completed'
+            )
+        ) = 1 THEN 1
+        ELSE 0
+    END AS complete_offer
+FROM person_event AS pe
+    LEFT JOIN profile_proc AS pp ON pe.person = pp.customer_id;
