@@ -269,14 +269,16 @@ CALL`DISTRB_PROCESS_COMPLETE`(0, 'person_event', 'gender');
 
 -- income distribution of those completed
 
+DROP VIEW income_distrib;
+
 CREATE VIEW INCOME_DISTRIB AS 
 	SELECT
 	    *,
 	    CASE
 	        WHEN income_null < 50000 THEN 'low income'
 	        WHEN income_null >= 50000
-	        AND income_null < 100000 THEN 'medium income'
-	        WHEN income_null >= 100000 THEN 'high income'
+	        AND income_null < 90000 THEN 'medium income'
+	        WHEN income_null >= 90000 THEN 'high income'
 	        ELSE NULL
 	    END AS income_group
 	FROM
